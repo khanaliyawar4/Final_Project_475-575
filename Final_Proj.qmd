@@ -4,6 +4,77 @@ format: html
 editor: visual
 ---
 
+## Data Processing: `plant_data` → `final_plant`
+
+The four code blocks below reproduce the cleaning steps that transformed `Plant_Data_orig.csv` into `final_unique_plant_data.csv`.
+
+### Step 1 — Load raw data and compare structure
+
+```{r}
+library(tidyverse)
+library(stringr)
+library(ggrepel)
+library(scales)
+
+
+plant_raw <- read_csv("Plant_Data_orig.csv")
+
+cat("=== Plant_Data_orig.csv ===\n")
+cat("Rows:", nrow(plant_raw), " | Columns:", ncol(plant_raw), "\n")
+cat("Column names:\n")
+print(names(plant_raw))
+
+cat("\nUnique Filenames:", n_distinct(plant_raw$Filename),
+    "vs total rows:", nrow(plant_raw), "\n")
+```
+
+### Step 2 — Normalise text to lowercase
+
+```{r}
+
+plant_lower <- plant_raw %>%
+  mutate(across(where(is.character), str_to_lower))
+
+cat("Before:", plant_raw$Species[1], "\n")
+cat("After: ", plant_lower$Species[1], "\n")
+```
+
+### Step 3 — Drop the `Selection_Markers` column
+
+```{r}
+
+cat("Non-empty Selection_Markers values (before drop):",
+    sum(!is.na(plant_lower$Selection_Markers) &
+          plant_lower$Selection_Markers != ""), "\n")
+
+plant_no_markers <- plant_lower %>%
+  select(-Selection_Markers)
+
+cat("Columns remaining:", ncol(plant_no_markers), "\n")
+print(names(plant_no_markers))
+```
+
+### Step 4 — Deduplicate by `Filename`
+
+```{r}
+plant_clean <- plant_no_markers %>%
+  group_by(Filename) %>%
+  slice(1) %>%
+  ungroup()
+
+cat("Rows before deduplication:", nrow(plant_no_markers), "\n")
+cat("Rows after deduplication: ", nrow(plant_clean), "\n")
+
+# Quick comparison against the provided final file
+plant_final <- read_csv("final_unique_plant_data.csv")
+cat("\nRow count matches final file:",
+    nrow(plant_clean) == nrow(plant_final), "\n")
+cat("Column count matches final file (excluding unnamed col):",
+    ncol(plant_clean) == ncol(plant_final) - 1L, "\n")
+```
+
+------------------------------------------------------------------------
+
 ```{r}
 library(tidyverse)
 library(stringr)
