@@ -4,83 +4,146 @@ format: html
 editor: visual
 ---
 
-## Data Processing: `plant_data` → `final_plant`
+## Data Cleaning: `Plant_Data_orig.csv` → `final_unique_plant_data.csv`
 
-The four code blocks below reproduce the cleaning steps that transformed `Plant_Data_orig.csv` into `final_unique_plant_data.csv`.
-
-### Step 1 — Load raw data and compare structure
-
-```{r}
+```{r setup, message=FALSE, warning=FALSE}
 library(tidyverse)
 library(stringr)
 library(ggrepel)
 library(scales)
 
-
 plant_raw <- read_csv("Plant_Data_orig.csv")
-
-cat("=== Plant_Data_orig.csv ===\n")
-cat("Rows:", nrow(plant_raw), " | Columns:", ncol(plant_raw), "\n")
-cat("Column names:\n")
-print(names(plant_raw))
-
-cat("\nUnique Filenames:", n_distinct(plant_raw$Filename),
-    "vs total rows:", nrow(plant_raw), "\n")
 ```
 
-### Step 2 — Normalise text to lowercase
+### Step 1 — Remove incomplete records (empty Gene rows)
+
+```{r}
+plant_raw %>%
+  filter(is.na(Gene) | Gene == "") %>%
+  select(Filename, Species, Gene, Mod_Type) %>%
+  print()
+
+plant_step1 <- plant_raw %>%
+  filter(!is.na(Gene), Gene != "")
+
+cat("Rows removed (no Gene):", nrow(plant_raw) - nrow(plant_step1), "\n")
+cat("Rows remaining:        ", nrow(plant_step1), "\n")
+```
+
+### Step 2 — One row per paper: keep highest-relevance gene
+
+The raw file has one row per gene per paper. the `Relevance_Score` column tells us which gene row best represents the paper's main finding
 
 ```{r}
 
-plant_lower <- plant_raw %>%
-  mutate(across(where(is.character), str_to_lower))
+plant_step1 %>%
+  filter(Filename == "9087934.pdf") %>%
+  select(Filename, Relevance_Score, Gene, Mod_Type, Phenotype) %>%
+  print()
 
-cat("Before:", plant_raw$Species[1], "\n")
-cat("After: ", plant_lower$Species[1], "\n")
-```
-
-### Step 3 — Drop the `Selection_Markers` column
-
-```{r}
-
-cat("Non-empty Selection_Markers values (before drop):",
-    sum(!is.na(plant_lower$Selection_Markers) &
-          plant_lower$Selection_Markers != ""), "\n")
-
-plant_no_markers <- plant_lower %>%
-  select(-Selection_Markers)
-
-cat("Columns remaining:", ncol(plant_no_markers), "\n")
-print(names(plant_no_markers))
-```
-
-### Step 4 — Deduplicate by `Filename`
-
-```{r}
-plant_clean <- plant_no_markers %>%
+plant_step2 <- plant_step1 %>%
   group_by(Filename) %>%
-  slice(1) %>%
+  slice_max(Relevance_Score, n = 1, with_ties = FALSE) %>%
   ungroup()
 
-cat("Rows before deduplication:", nrow(plant_no_markers), "\n")
-cat("Rows after deduplication: ", nrow(plant_clean), "\n")
+cat("Rows before deduplication:", nrow(plant_step1), "\n")
+cat("Rows after deduplication: ", nrow(plant_step2), "\n")
+cat("Unique papers:            ", n_distinct(plant_step2$Filename), "\n")
+```
 
-# Quick comparison against the provided final file
-plant_final <- read_csv("final_unique_plant_data.csv")
-cat("\nRow count matches final file:",
-    nrow(plant_clean) == nrow(plant_final), "\n")
-cat("Column count matches final file (excluding unnamed col):",
-    ncol(plant_clean) == ncol(plant_final) - 1L, "\n")
+### Step 3 — Drop `Relevance_Score` and `Terminator`
+
+```{r}
+
+cat("Non-empty Terminator cells:",
+    sum(!is.na(plant_step2$Terminator) & plant_step2$Terminator != ""), "\n")
+
+plant_step3 <- plant_step2 %>%
+  select(-Relevance_Score, -Terminator)
+
+cat("Columns after drop:", ncol(plant_step3), "\n")
+print(names(plant_step3))
+```
+
+### Step 4 — Rename `Gene` → `Gene_Target` and `Mod_Type` → `Mod_type`
+
+```{r}
+plant_step4 <- plant_step3 %>%
+  rename(
+    Gene_Target = Gene,
+    Mod_type    = Mod_Type
+  )
+
+cat("Renamed columns:\n")
+print(names(plant_step4))
+```
+
+### Step 5 — Derive `Mod_Method` from `Mod_type`
+
+```{r}
+plant_step5 <- plant_step4 %>%
+  mutate(
+    Mod_Method = case_when(
+      str_detect(str_to_lower(Mod_type),
+        "agrobacterium|agro.infiltration")                         ~ "Agrobacterium",
+      str_detect(str_to_lower(Mod_type),
+        "crispr|cas9|cas12|base edit|prime edit")                  ~ "CRISPR/Cas9",
+      str_detect(str_to_lower(Mod_type),
+        "biolistic|bombardment|particle gun")                      ~ "Biolistics",
+      str_detect(str_to_lower(Mod_type),
+        "rnai|rna interference|sirna|shrna|antisense|gene silenc|mirna|mir159") ~ "RNAi",
+      str_detect(str_to_lower(Mod_type),
+        "vigs|virus.induced gene silenc")                          ~ "VIGS",
+      TRUE ~ "Unknown"
+    )
+  )
+
+cat("Mod_Method distribution:\n")
+print(table(plant_step5$Mod_Method))
+```
+
+### Step 6 — Derive `Mod_Direction` from `Mod_type`
+
+```{r}
+plant_step6 <- plant_step5 %>%
+  mutate(
+    Mod_Direction = case_when(
+      str_detect(str_to_lower(Mod_type),
+        "overexpression|overexpress|upregulat|up-regulat|transcriptional activation|promoter replacement") ~ "Overexpression",
+      str_detect(str_to_lower(Mod_type),
+        "knockout|knockdown|knock.out|knock.down|deletion|gene silenc|silencing|rnai|downregulat|down-regulat|suppression|loss.of.function|transcriptional repression|antisense") ~ "Knockdown/Out",
+      str_detect(str_to_lower(Mod_type),
+        "mutation|mutant|mutagenesis|snp|snv|indel|missense|insertional mutant|inversion|natural mutation") ~ "Mutation",
+      TRUE ~ "Modification"
+    )
+  )
+
+cat("Mod_Direction distribution:\n")
+print(table(plant_step6$Mod_Direction))
+```
+
+### Step 7 — Standardise text: lowercase + collapse whitespace
+
+```{r}
+
+plant_step6 %>%
+  count(Application_Category, sort = TRUE) %>%
+  head(6) %>%
+  print()
+
+plant_step7 <- plant_step6 %>%
+  mutate(across(where(is.character), ~ str_squish(str_to_lower(.x))))
+
+
+plant_step7 %>%
+  count(Application_Category, sort = TRUE) %>%
+  head(6) %>%
+  print()
 ```
 
 ------------------------------------------------------------------------
 
 ```{r}
-library(tidyverse)
-library(stringr)
-library(ggrepel)
-library(scales)
-
 plant <- read_csv("final_unique_plant_data.csv")
 glimpse(plant)
 ```
@@ -260,6 +323,5 @@ ggplot(obj4_summary, aes(x = tech_group, y = mean_pct)) +
 stat test
 
 ```{r}
-
 wilcox.test(yield_pct ~ tech_group, data = obj4_simple)
 ```
