@@ -1,0 +1,311 @@
+---
+title: "RD_proj_KES"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(stringr)
+library(ggrepel)
+library(scales)
+
+plant <- read_csv("final_unique_plant_data.csv")
+glimpse(plant)
+```
+
+Objective 1: Trends in gene-editing technologies over time
+
+```{r}
+obj1 <- plant %>%
+  mutate(
+    # Extract year from DOI (common pattern like 10.xxxx/xxxx(2018)...)
+    year = str_extract(DOI, "(19|20)\\d{2}") %>% as.numeric(),
+
+    # classify technology
+    tech_type = case_when(
+      str_detect(str_to_lower(Mod_type), "crispr|cas9|cas12|base editing|prime editing") ~ "CRISPR",
+      str_detect(str_to_lower(Mod_type), "rnai") ~ "RNAi",
+      str_detect(str_to_lower(Mod_type), "transgenic|overexpression|agrobacterium|t-dna|transformation|particle bombardment") ~ "Transgenic",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  filter(!is.na(year), !is.na(tech_type))
+
+# yearly counts
+obj1_summary <- obj1 %>%
+  count(year, tech_type)
+
+obj1_summary
+```
+
+```{r}
+ggplot(obj1_summary, aes(x = year, y = n, color = tech_type)) +
+  geom_line(linewidth = 1.2) +
+  geom_point() +
+  labs(
+    title = "Evolution of gene-editing technologies in plant biology",
+    x = "Publication Year",
+    y = "Number of studies",
+    color = "Technology"
+  ) +
+  theme_minimal()
+```
+
+When did CRISPR dominate?
+
+```{r}
+crispr_dominance <- obj1_summary %>%
+  group_by(year) %>%
+  mutate(total = sum(n)) %>%
+  filter(tech_type == "CRISPR") %>%
+  mutate(prop = n / total)
+
+crispr_dominance
+```
+
+Objective 2: Plant family focus and under-studied crops
+
+```{r}
+obj2 <- plant %>%
+  mutate(
+    species_lower = str_to_lower(Species),
+
+    plant_family = case_when(
+      str_detect(species_lower, "rice|wheat|maize|corn|barley|sorghum") ~ "Poaceae",
+      str_detect(species_lower, "tomato|potato|pepper|eggplant") ~ "Solanaceae",
+      str_detect(species_lower, "soybean|bean|pea|lentil") ~ "Fabaceae",
+      str_detect(species_lower, "arabidopsis") ~ "Brassicaceae",
+      str_detect(species_lower, "cotton") ~ "Malvaceae",
+      TRUE ~ "Other"
+    )
+  )
+```
+
+Summary counts
+
+```{r}
+obj2_summary <- obj2 %>%
+  count(plant_family, sort = TRUE)
+
+obj2_summary
+```
+
+```{r}
+ggplot(obj2_summary, aes(x = fct_reorder(plant_family, n), y = n)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Plant families studied in functional genomics",
+    x = "Plant family",
+    y = "Number of studies"
+  ) +
+  theme_minimal()
+```
+
+Identify under-studied species
+
+```{r}
+species_counts <- obj2 %>%
+  count(Species, sort = TRUE)
+
+understudied <- species_counts %>%
+  filter(n <= 2)   # threshold can be adjusted
+
+understudied
+```
+
+under-studied vs major crops
+
+```{r}
+obj2 %>%
+  mutate(category = if_else(Species %in% understudied$Species, "Under-studied", "Well-studied")) %>%
+  count(category) %>%
+  ggplot(aes(x = category, y = n, fill = category)) +
+  geom_col() +
+  labs(
+    title = "Distribution of study focus across plant species",
+    x = "",
+    y = "Count"
+  ) +
+  theme_minimal()
+```
+
+Objective 3: Map the relationship between specific gene families and high-value agricultural traits like drought tolerance and disease resistance.
+
+Creating trait labels and infer gene family
+
+```{r}
+obj3 <- plant %>%
+  mutate(
+    trait_group = case_when(
+      str_detect(str_to_lower(Application_Category), "drought tolerance") |
+        str_detect(str_to_lower(Phenotype), "drought") ~ "Drought tolerance",
+
+      str_detect(str_to_lower(Application_Category), "disease resistance") |
+        str_detect(str_to_lower(Phenotype), "disease|blight|fungal|pathogen|viral|virus|resistance") ~ "Disease resistance",
+
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(trait_group)) %>%
+  mutate(
+    Gene_Target = str_to_lower(Gene_Target),
+
+    # keep only first listed target if multiple are present
+    Gene_Target = str_split(Gene_Target, ",|;|/|\\|") %>% map_chr(1),
+    Gene_Target = str_trim(Gene_Target),
+
+    # remove common species prefixes
+    Gene_Target_clean = str_remove(Gene_Target,
+      "^(at|os|sl|zm|ta|hv|st|gh|gm|mt|rc|cs|le|pe|ib|pg|md|pa|vv|bn|bna|loc|loc_)[-_]?"
+    ),
+
+    gene_family = case_when(
+      str_detect(Gene_Target_clean, "^myb") ~ "MYB",
+      str_detect(Gene_Target_clean, "^nac") ~ "NAC",
+      str_detect(Gene_Target_clean, "^wrky") ~ "WRKY",
+      str_detect(Gene_Target_clean, "^dreb") ~ "DREB",
+      str_detect(Gene_Target_clean, "^erf|^ap2") ~ "AP2/ERF",
+      str_detect(Gene_Target_clean, "^bzip") ~ "bZIP",
+      str_detect(Gene_Target_clean, "^mlo") ~ "MLO",
+      str_detect(Gene_Target_clean, "^sweet") ~ "SWEET",
+      str_detect(Gene_Target_clean, "r genes|r gene|r-gene") ~ "R genes",
+      str_detect(Gene_Target_clean, "^pr") ~ "PR",
+      TRUE ~ str_extract(str_to_upper(Gene_Target_clean), "^[A-Z]+")
+    )
+  ) %>%
+  filter(!is.na(gene_family), gene_family != "")
+```
+
+Summary of top gene families
+
+```{r}
+obj3_summary <- obj3 %>%
+  count(gene_family, trait_group, sort = TRUE) %>%
+  group_by(gene_family) %>%
+  mutate(total_family_n = sum(n)) %>%
+  ungroup() %>%
+  filter(total_family_n >= 3)   # adjust threshold
+obj3_summary
+```
+
+Heatmap of gene family vs traits
+
+```{r}
+heatmap_plot <- obj3_summary %>%
+  ggplot(aes(
+    x = trait_group,
+    y = fct_reorder(gene_family, total_family_n),
+    fill = n
+  )) +
+  geom_tile(color = "white", linewidth = 0.4) +
+  scale_fill_gradient(low = "grey90", high = "steelblue") +
+  labs(
+    title = "Gene family associations with drought tolerance and disease resistance",
+    x = "Trait category",
+    y = "Gene family",
+    fill = "Count of records"
+  ) +
+  theme_minimal(base_size = 12)
+
+heatmap_plot
+```
+
+Bubble plot
+
+```{r}
+bubble_plot <- obj3_summary %>%
+  ggplot(aes(
+    x = trait_group,
+    y = fct_reorder(gene_family, total_family_n),
+    size = n
+  )) +
+  geom_point(alpha = 0.75) +
+  scale_size_continuous(range = c(3, 12)) +
+  labs(
+    title = "Strength of gene family–trait relationships",
+    x = "Trait category",
+    y = "Gene family",
+    size = "Count of records"
+  ) +
+  theme_minimal(base_size = 12)
+
+bubble_plot
+```
+
+Objective 4 (Quantitative Analysis):
+
+Extract and analyze numerical data from Quant_Data text to evaluate whether CRISPR-edited plants demonstrate greater percentage improvements in yield compared to traditional transgenic plants.
+
+define the technology groups
+
+```{r}
+obj4_simple <- plant %>%
+  mutate(
+    tech_group = case_when(
+      str_detect(str_to_lower(Mod_type), "crispr|cas9|cas12|base editing|prime editing") ~ "CRISPR",
+      str_detect(str_to_lower(Mod_type), "transgenic|overexpression|agrobacterium|rnai|particle bombardment|t-dna|transformation") ~ "Transgenic",
+      TRUE ~ NA_character_
+    ),
+    yield_related =
+      str_detect(str_to_lower(Application_Category), "yield") |
+      str_detect(str_to_lower(Phenotype), "yield") |
+      str_detect(str_to_lower(Quant_Data), "yield"),
+
+    percent_match = str_extract(Quant_Data, "\\d+\\.?\\d*\\s*%"),
+    yield_pct = as.numeric(str_remove(percent_match, "%"))
+  ) %>%
+  filter(!is.na(tech_group), yield_related, !is.na(yield_pct))
+```
+
+summary
+
+```{r}
+obj4_summary <- obj4_simple %>%
+  group_by(tech_group) %>%
+  summarise(
+    n_values = n(),
+    mean_pct = mean(yield_pct, na.rm = TRUE),
+    median_pct = median(yield_pct, na.rm = TRUE),
+    sd_pct = sd(yield_pct, na.rm = TRUE),
+    min_pct = min(yield_pct, na.rm = TRUE),
+    max_pct = max(yield_pct, na.rm = TRUE)
+  )
+
+obj4_summary
+```
+
+Boxplot
+
+```{r}
+ggplot(obj4_simple, aes(x = tech_group, y = yield_pct)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.15, alpha = 0.6) +
+  labs(
+    title = "Yield improvement in CRISPR vs Transgenic plants",
+    x = "Modification type",
+    y = "Yield change (%)"
+  ) +
+  theme_minimal()
+```
+
+bar chart
+
+```{r}
+ggplot(obj4_summary, aes(x = tech_group, y = mean_pct)) +
+  geom_col() +
+  labs(
+    title = "Average yield improvement by modification type",
+    x = "Modification type",
+    y = "Mean yield change (%)"
+  ) +
+  theme_minimal()
+```
+
+stat test
+
+```{r}
+
+wilcox.test(yield_pct ~ tech_group, data = obj4_simple)
+```
