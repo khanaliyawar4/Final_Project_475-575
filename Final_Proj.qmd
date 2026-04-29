@@ -13,6 +13,9 @@ library(ggrepel)
 library(scales)
 
 plant_raw <- read_csv("Plant_Data_orig.csv")
+View(plant_raw)
+plant_raw2 <- read_csv("final_unique_plant_data.csv")
+View(plant_raw2)
 ```
 
 ### Step 1 — Remove incomplete records (empty Gene rows)
