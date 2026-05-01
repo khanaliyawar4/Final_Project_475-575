@@ -13,9 +13,6 @@ library(ggrepel)
 library(scales)
 
 plant_raw <- read_csv("Plant_Data_orig.csv")
-View(plant_raw)
-plant_raw2 <- read_csv("final_unique_plant_data.csv")
-View(plant_raw2)
 ```
 
 ### Step 1 — Remove incomplete records (empty Gene rows)
@@ -144,42 +141,72 @@ plant_step7 %>%
   print()
 ```
 
+### Step 8 — Extract publication year from DOI
+
+DOIs frequently encode the publication year as a four-digit number in the suffix (e.g. `10.1186/s12870-**2022**-03584-y`). We pull the first match of `(19|20)\d{2}` and store it as an integer column `Pub_Year`.
+
+```{r}
+current_year <- as.integer(format(Sys.Date(), "%Y"))
+
+plant_step8 <- plant_step7 %>%
+  mutate(
+    # (?<![0-9]) and (?![0-9]) ensure the 4 digits are NOT part of a
+    # longer number (e.g. avoids matching "2099" inside "112099")
+    Pub_Year = str_extract(DOI, "(?<![0-9])(19|20)\\d{2}(?![0-9])") %>%
+                 as.integer(),
+    # sanity-check: keep only plausible publication years
+    Pub_Year = if_else(Pub_Year >= 1990 & Pub_Year <= current_year,
+                       Pub_Year, NA_integer_)
+  )
+
+cat("Year extraction summary:\n")
+cat("  Papers with year found :", sum(!is.na(plant_step8$Pub_Year)), "\n")
+cat("  Papers without year    :", sum( is.na(plant_step8$Pub_Year)), "\n")
+cat("  Year range             :",
+    min(plant_step8$Pub_Year, na.rm = TRUE), "–",
+    max(plant_step8$Pub_Year, na.rm = TRUE), "\n\n")
+
+plant_step8 %>%
+  count(Pub_Year, sort = FALSE) %>%
+  print(n = Inf)
+```
+
 ------------------------------------------------------------------------
 
 ```{r}
-plant <- read_csv("final_unique_plant_data.csv")
+# Use the fully cleaned pipeline output directly
+plant <- plant_step8
 glimpse(plant)
 ```
 
 Objective 1: Trends in gene-editing technologies over time
 
 ```{r}
+# Pub_Year already extracted in Step 8 — no inline re-extraction needed
 obj1 <- plant %>%
+  filter(!is.na(Pub_Year)) %>%
   mutate(
-    # Extract year from DOI (common pattern like 10.xxxx/xxxx(2018)...)
-    year = str_extract(DOI, "(19|20)\\d{2}") %>% as.numeric(),
-
-    # classify technology
     tech_type = case_when(
-      str_detect(str_to_lower(Mod_type), "crispr|cas9|cas12|base editing|prime editing") ~ "CRISPR",
-      str_detect(str_to_lower(Mod_type), "rnai") ~ "RNAi",
-      str_detect(str_to_lower(Mod_type), "transgenic|overexpression|agrobacterium|t-dna|transformation|particle bombardment") ~ "Transgenic",
+      str_detect(Mod_type, "crispr|cas9|cas12|base editing|prime editing") ~ "CRISPR",
+      str_detect(Mod_type, "rnai")                                          ~ "RNAi",
+      str_detect(Mod_type,
+        "transgenic|overexpression|agrobacterium|t-dna|transformation|particle bombardment") ~ "Transgenic",
       TRUE ~ "Other"
     )
-  ) %>%
-  filter(!is.na(year), !is.na(tech_type))
+  )
 
 # yearly counts
 obj1_summary <- obj1 %>%
-  count(year, tech_type)
+  count(Pub_Year, tech_type)
 
 obj1_summary
 ```
 
 ```{r}
-ggplot(obj1_summary, aes(x = year, y = n, color = tech_type)) +
+ggplot(obj1_summary, aes(x = Pub_Year, y = n, color = tech_type)) +
   geom_line(linewidth = 1.2) +
   geom_point() +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 8)) +
   labs(
     title = "Evolution of gene-editing technologies in plant biology",
     x = "Publication Year",
@@ -193,10 +220,11 @@ When did CRISPR dominate?
 
 ```{r}
 crispr_dominance <- obj1_summary %>%
-  group_by(year) %>%
+  group_by(Pub_Year) %>%
   mutate(total = sum(n)) %>%
   filter(tech_type == "CRISPR") %>%
-  mutate(prop = n / total)
+  mutate(prop = n / total) %>%
+  arrange(Pub_Year)
 
 crispr_dominance
 ```
