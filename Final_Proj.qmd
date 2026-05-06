@@ -13,6 +13,9 @@ library(ggrepel)
 library(scales)
 
 plant_raw <- read_csv("Plant_Data_orig.csv")
+plant_raw_2 <- read_csv("final_unique_plant_data.csv")
+View(plant_raw)
+View(plant_raw_2)
 ```
 
 ### Step 1 — Remove incomplete records (empty Gene rows)
@@ -141,17 +144,14 @@ plant_step7 %>%
   print()
 ```
 
-### Step 8 — Extract publication year from DOI
-
-DOIs frequently encode the publication year as a four-digit number in the suffix (e.g. `10.1186/s12870-**2022**-03584-y`). We pull the first match of `(19|20)\d{2}` and store it as an integer column `Pub_Year`.
+### Step 8 — Extract publication year from DOI -\> Pub_Year
 
 ```{r}
 current_year <- as.integer(format(Sys.Date(), "%Y"))
 
 plant_step8 <- plant_step7 %>%
   mutate(
-    # (?<![0-9]) and (?![0-9]) ensure the 4 digits are NOT part of a
-    # longer number (e.g. avoids matching "2099" inside "112099")
+ 
     Pub_Year = str_extract(DOI, "(?<![0-9])(19|20)\\d{2}(?![0-9])") %>%
                  as.integer(),
     # sanity-check: keep only plausible publication years
@@ -169,6 +169,8 @@ cat("  Year range             :",
 plant_step8 %>%
   count(Pub_Year, sort = FALSE) %>%
   print(n = Inf)
+
+#write.csv(plant_step8, "final_unique_plant_data.csv", row.names = FALSE)
 ```
 
 ------------------------------------------------------------------------
